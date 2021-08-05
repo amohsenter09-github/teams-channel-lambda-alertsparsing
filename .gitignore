@@ -1,0 +1,18 @@
+node_modules
+
+# CDK asset staging directory
+.cdk.staging
+cdk.out
+cdk.context.json
+
+# API
+outputs/compiled-sam.yaml
+.vscode
+.idea
+*.iml
+.scannerwork
+reports
+.nyc_output
+*.patch
+.DS_Store
+coverage

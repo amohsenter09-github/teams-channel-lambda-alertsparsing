@@ -1,0 +1,53 @@
+{
+<<<<<<< HEAD
+  "name": "teams-channel-lambda-alertsparsing",
+  "version": "1.0.2",
+=======
+  "name": "ps-event-bridge-template",
+  "version": "1.0.0",
+>>>>>>> 33922bf9bb6508e0ff5afe24907e7935492f7c67
+  "private": true,
+  "author": "",
+  "description": "",
+  "keywords": [],
+  "license": "ISC",
+  "repository": {
+    "type": "git",
+    "url": "git@git.developers.burberry.com:platform-services/infrastructure/teams-channel-lambda-alertsparsing.git"
+  },
+  "release": {
+    "extends": "ps-semantic-release"
+  },
+  "bin": {
+    "teams-channel-lambda-alertsparsing-app": "cdk/app.js"
+  },
+  "scripts": {
+    "format": "prettier --write \"**/*.{js,md}\"",
+    "lint": "eslint --format=node_modules/eslint-formatter-pretty .",
+    "release": "semantic-release",
+    "test": "npm run test:unit -- --silent",
+    "test:unit": "jest",
+    "test:unit:coverage": "npm run test:unit -- --collectCoverage=true"
+  },
+  "devDependencies": {
+    "@aws-cdk/assert": "1.45.0",
+    "aws-cdk": "1.45.0",
+    "eslint": "^5.6.0",
+    "eslint-config-prettier": "^6.15.0",
+    "eslint-config-ps": "^1.0.6",
+    "eslint-formatter-pretty": "^1.3.0",
+    "eslint-plugin-import": "^2.22.1",
+    "eslint-plugin-jest": "^23.20.0",
+    "eslint-plugin-prettier": "^3.1.3",
+    "husky": "^4.3.0",
+    "jest": "^25.5.0",
+    "lint-staged": "^10.5.1",
+    "prettier": "^2.2.0",
+    "ps-semantic-release": "^1.0.3",
+    "semantic-release": "^17.3.0"
+  },
+  "dependencies": {
+    "@aws-cdk/aws-lambda": "^1.74.0",
+    "@aws-cdk/core": "^1.74.0"
+  }
+}

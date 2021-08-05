@@ -1,0 +1,201 @@
+# Template version: 1.0.2
+
+image: ${CI_REGISTRY}/${BASE_IMAGE_PATH}:${BASE_IMAGE_ID}
+
+.job_deploy_before_script:
+  before_script: &job_deploy_before_script
+    - echo ${CI_REGISTRY}/${BASE_IMAGE_PATH}:${BASE_IMAGE_ID}
+    - echo $CI_ENVIRONMENT_SLUG
+    - echo $CI_ENVIRONMENT_NAME
+    - SERVICE_NAME=$(node -pe "require('./cdk.json').context['props']['serviceName']")
+    - if [[ $CI_ENVIRONMENT_SLUG == "prod" ]]; then export AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID_PROD; export AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY_PROD; export AWS_ACCOUNT=$AWS_ACCOUNT_PROD; fi
+    - if [[ "$(echo $CI_ENVIRONMENT_NAME | cut -c1-4)" == "dev/" ]]; then export ENVIRONMENT="dev"; else export ENVIRONMENT=$CI_ENVIRONMENT_SLUG; fi
+    - npm install -g aws-cdk && cdk --version
+    - npm install
+  
+.job_quality_checks_before_script:
+  before_script: &job_quality_checks_before_script
+    - echo ${CI_REGISTRY}/${BASE_IMAGE_PATH}:${BASE_IMAGE_ID}
+    - npm install
+
+.job_deploy_script:
+  script: &job_deploy_script
+    - cdk bootstrap aws://$AWS_ACCOUNT/$AWS_DEFAULT_REGION --toolkit-stack-name ps-cdktoolkit-$ENVIRONMENT --toolkit-bucket-name ps-cdktoolkit-$ENVIRONMENT-bucket-$AWS_DEFAULT_REGION -t "Project=PS Shared" -t "Environment=${ENVIRONMENT}" -t "Budget.Project=PS" -t "Owner=platform.microservices@burberry.com" -t "Platform.Domain.Name=PS Shared" -t "Platform.Service.Name=PS Shared" -t "DeployedBy=AWS CDK"
+    - cdk diff
+    - cdk deploy --require-approval never --toolkit-stack-name ps-cdktoolkit-$ENVIRONMENT Ps*
+
+stages:
+  - dynamic-test
+  - dynamic-deploy
+  - integration-tagging
+  - staging-deploy
+  - production
+
+test:sca:eslint:
+  stage: dynamic-test
+  before_script: *job_quality_checks_before_script
+  script:
+    - npm run lint
+  only:
+    refs:
+      - branches
+  except:
+    refs:
+      - master
+
+test:unit&component:
+  stage: dynamic-test
+  before_script: *job_quality_checks_before_script
+  script:
+    - npm run test:unit:coverage
+  only:
+    refs:
+      - branches
+  except:
+    refs:
+      - master
+  coverage: /All files[^|]*\|[^|]*\s+([\d\.]+)/
+  artifacts:
+    paths:
+      - reports/
+
+cdk:deploy:dev:eu:
+  stage: dynamic-deploy
+  variables:
+    AWS_DEFAULT_REGION: eu-west-1
+  before_script: *job_deploy_before_script
+  script:
+    - cdk bootstrap aws://$AWS_ACCOUNT/$AWS_DEFAULT_REGION --toolkit-stack-name ps-cdktoolkit-$ENVIRONMENT --toolkit-bucket-name ps-cdktoolkit-$ENVIRONMENT-bucket-$AWS_DEFAULT_REGION -t "Project=PS Shared" -t "Environment=${ENVIRONMENT}" -t "Budget.Project=PS" -t "Owner=platform.microservices@burberry.com" -t "Platform.Domain.Name=PS Shared" -t "Platform.Service.Name=PS Shared" -t "DeployedBy=AWS CDK"
+    - cdk diff
+    - cdk deploy --require-approval never --toolkit-stack-name ps-cdktoolkit-$ENVIRONMENT Ps*
+    ##S3 file to remove the review app
+    - export UNIQUE_REVIEW_APPS_FILE=$(echo $CI_PROJECT_ID-$CI_ENVIRONMENT_SLUG.sh) && touch $UNIQUE_REVIEW_APPS_FILE;
+    - echo SERVICE_NAME=$SERVICE_NAME >> $UNIQUE_REVIEW_APPS_FILE;
+    - export CLOUD_FORMATION_STACK_NAMES=$(cdk list -l -j | jq .[].name | sed 's/"//g') && echo CLOUD_FORMATION_STACK_NAMES="\"$CLOUD_FORMATION_STACK_NAMES"\" >> $UNIQUE_REVIEW_APPS_FILE;
+    - cat $UNIQUE_REVIEW_APPS_FILE;
+    - aws s3 cp $UNIQUE_REVIEW_APPS_FILE s3://ps-cdktoolkit-$ENVIRONMENT-bucket-$AWS_DEFAULT_REGION/$UNIQUE_REVIEW_APPS_FILE;
+    - rm $UNIQUE_REVIEW_APPS_FILE;
+    ##S3 file to remove the review app
+  environment:
+    name: dev/$CI_COMMIT_REF_SLUG
+    on_stop: stop:dev:env:eu
+  only:
+    refs:
+      - branches
+  except:
+    refs:
+      - master
+
+stop:dev:env:eu:
+  stage: dynamic-deploy
+  variables:
+    AWS_DEFAULT_REGION: eu-west-1
+    GIT_STRATEGY: none
+  script:
+    - echo "Remove review app"
+    - export UNIQUE_REVIEW_APPS_FILE=$(echo $CI_PROJECT_ID-$CI_ENVIRONMENT_SLUG.sh)
+    - if [[ "$(echo $CI_ENVIRONMENT_NAME | cut -c1-4)" == "dev/" ]]; then export ENVIRONMENT="dev"; else export ENVIRONMENT=$CI_ENVIRONMENT_SLUG; fi
+    - aws s3api get-object --bucket ps-cdktoolkit-$ENVIRONMENT-bucket-$AWS_DEFAULT_REGION --key $UNIQUE_REVIEW_APPS_FILE $UNIQUE_REVIEW_APPS_FILE
+    - cat $UNIQUE_REVIEW_APPS_FILE
+    - . $UNIQUE_REVIEW_APPS_FILE
+    # remove service stacks
+    - for stack in $(echo $CLOUD_FORMATION_STACK_NAMES); do echo "Removing the CFN Stack $stack" && (aws cloudformation delete-stack --stack-name $stack || (aws cloudformation describe-stack-events --stack-name $stack --max-items 40 && false)); done;
+    - aws s3api delete-object --bucket ps-cdktoolkit-$ENVIRONMENT-bucket-$AWS_DEFAULT_REGION --key $UNIQUE_REVIEW_APPS_FILE
+  when: manual
+  environment:
+    name: dev/$CI_COMMIT_REF_SLUG
+    action: stop
+  only:
+    refs:
+      - branches
+  except:
+    refs:
+      - master
+
+semantic:release:preparation:
+  stage: integration-tagging
+  before_script: *job_quality_checks_before_script
+  script:
+    - |
+      if [ "$CI_PROJECT_ID" -eq 2660 ]; then
+        npm run release -- --repository-url $CI_REPOSITORY_URL --dry-run > release.txt
+        if grep -q "The next release version is" release.txt; then
+          export VERSION=$(cat release.txt | grep "The next release version is" | egrep -o -w '([0-9]+)\.([0-9]+)\.([0-9]+)$')
+          echo "New Template version is $VERSION"
+          sed -i "s/^# Template version: [0-9]*\.[0-9]*\.[0-9]*$/# Template version: $VERSION/" .gitlab-ci.yml
+          head .gitlab-ci.yml
+          git config --global user.name "Platform Services"
+          git config --global user.email "platform.microservices@burberry.com"
+          git add .gitlab-ci.yml
+          if [ -n "$(git status --porcelain)" ]; then git commit -m "docs: update template version" && git push https://gitlab-ci-token:"${GITLAB_TOKEN}"@git.developers.burberry.com/${CI_PROJECT_PATH}.git HEAD:$CI_COMMIT_REF_NAME ; else echo "No changes in .gitlab-ci.yml"; fi
+        fi
+      fi
+    - npm run release -- --repository-url $CI_REPOSITORY_URL
+  only:
+    refs:
+      - master
+  except:
+    variables:
+      - $GITLAB_USER_LOGIN == $PS_SERVICE_USER
+
+cdk:deploy:preprod:eu:
+  stage: staging-deploy
+  variables:
+    AWS_DEFAULT_REGION: eu-west-1
+  before_script: *job_deploy_before_script
+  script: *job_deploy_script
+  environment:
+    name: preprod
+  only:
+    refs:
+      - /\bv?(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-[\da-z-]+(?:\.[\da-z-]+)*)?(?:\+[\da-z-]+(?:\.[\da-z-]+)*)?\b/
+  except:
+    refs:
+      - branches
+
+cdk:deploy:preprod:us:
+  stage: staging-deploy
+  variables:
+    AWS_DEFAULT_REGION: us-east-1
+  before_script: *job_deploy_before_script
+  script: *job_deploy_script
+  environment:
+    name: preprod
+  only:
+    refs:
+      - /\bv?(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-[\da-z-]+(?:\.[\da-z-]+)*)?(?:\+[\da-z-]+(?:\.[\da-z-]+)*)?\b/
+  except:
+    refs:
+      - branches
+
+cdk:deploy:prod:eu:
+  stage: production
+  variables:
+    AWS_DEFAULT_REGION: eu-west-1
+  before_script: *job_deploy_before_script
+  script: *job_deploy_script
+  environment:
+    name: prod
+  when: manual
+  only:
+    refs:
+      - /\bv?(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-[\da-z-]+(?:\.[\da-z-]+)*)?(?:\+[\da-z-]+(?:\.[\da-z-]+)*)?\b/
+  except:
+    refs:
+      - branches
+
+cdk:deploy:prod:us:
+  stage: production
+  variables:
+    AWS_DEFAULT_REGION: us-east-1
+  before_script: *job_deploy_before_script
+  script: *job_deploy_script
+  environment:
+    name: prod
+  when: manual
+  only:
+    refs:
+      - /\bv?(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-[\da-z-]+(?:\.[\da-z-]+)*)?(?:\+[\da-z-]+(?:\.[\da-z-]+)*)?\b/
+  except:
+    refs:
+      - branches

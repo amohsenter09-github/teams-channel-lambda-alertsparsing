@@ -1,0 +1,16 @@
+{
+  "extends": [
+    "eslint-config-ps",
+    "plugin:prettier/recommended"
+  ],
+  "plugins": [
+    "prettier",
+    "jest"
+  ],
+  "rules": {
+    "no-new": "off"
+  },
+  "env": {
+    "jest/globals": true
+  }
+}

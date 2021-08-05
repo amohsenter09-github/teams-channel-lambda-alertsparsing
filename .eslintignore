@@ -1,0 +1,8 @@
+node_modules
+build
+outputs
+config
+envs_config
+.scannerwork
+reports
+.nyc_output
